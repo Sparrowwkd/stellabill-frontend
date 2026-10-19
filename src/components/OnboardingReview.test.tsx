@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import OnboardingReview from './OnboardingReview';
 
 describe('OnboardingReview', () => {
@@ -79,5 +79,85 @@ describe('OnboardingReview', () => {
     );
 
     expect(screen.getByText(/No country selected/)).toBeInTheDocument();
+  });
+
+  const validBusiness = {
+    businessName: 'Test Business',
+    website: 'example.com',
+    country: 'US',
+  };
+
+  // A checksum-valid EVM address (all lowercase hex is valid EIP-55).
+  const validPayout = '0x0000000000000000000000000000000000000000';
+
+  const renderWithRoutes = () =>
+    render(
+      <MemoryRouter initialEntries={['/onboarding/review']}>
+        <Routes>
+          <Route path="/onboarding/review" element={<OnboardingReview />} />
+          <Route path="/onboarding/business" element={<div>Business Step</div>} />
+          <Route path="/onboarding/payout" element={<div>Payout Step</div>} />
+          <Route path="/onboarding-success" element={<div>Success Page</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+  it('redirects to business step when storage is empty', async () => {
+    renderWithRoutes();
+
+    await waitFor(() => {
+      expect(screen.getByText('Business Step')).toBeInTheDocument();
+    });
+  });
+
+  it('redirects to payout step when business exists but payout is missing', async () => {
+    sessionStorage.setItem('onboardingBusiness', JSON.stringify(validBusiness));
+
+    renderWithRoutes();
+
+    await waitFor(() => {
+      expect(screen.getByText('Payout Step')).toBeInTheDocument();
+    });
+  });
+
+  it('completes successfully and clears storage on happy path', async () => {
+    sessionStorage.setItem('onboardingBusiness', JSON.stringify(validBusiness));
+    sessionStorage.setItem('onboardingPayout', JSON.stringify({ payoutAddress: validPayout }));
+
+    renderWithRoutes();
+
+    const completeButton = screen.getByRole('button', { name: /complete setup/i });
+    expect(completeButton).toBeEnabled();
+
+    fireEvent.click(completeButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('Success Page')).toBeInTheDocument();
+    });
+
+    expect(sessionStorage.getItem('onboardingBusiness')).toBeNull();
+    expect(sessionStorage.getItem('onboardingPayout')).toBeNull();
+  });
+
+  it('shows an inline error and stays on review when submit rejects', async () => {
+    sessionStorage.setItem('onboardingBusiness', JSON.stringify(validBusiness));
+    sessionStorage.setItem('onboardingPayout', JSON.stringify({ payoutAddress: validPayout }));
+
+    const submitSpy = vi
+      .spyOn(OnboardingReview as any, 'submitOnboarding')
+      .mockRejectedValue(new Error('submit failed'));
+
+    renderWithRoutes();
+
+    fireEvent.click(screen.getByRole('button', { name: /complete setup/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/submit failed/i)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Success Page')).not.toBeInTheDocument();
+    expect(sessionStorage.getItem('onboardingBusiness')).not.toBeNull();
+
+    submitSpy.mockRestore();
   });
 });
